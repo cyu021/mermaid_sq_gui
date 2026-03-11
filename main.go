@@ -25,6 +25,7 @@ import (
 	"golang.org/x/image/font/opentype"
 	"golang.org/x/image/math/fixed"
 	"os/exec"
+	"path/filepath"
 	"time"
 )
 
@@ -201,6 +202,20 @@ type editorApp struct {
 	zoomScale    float32
 	stickyHeader *fyne.Container
 	stickyContainer *fyne.Container
+}
+
+func (e *editorApp) getExeDir() fyne.ListableURI {
+	exePath, err := os.Executable()
+	if err != nil {
+		return nil
+	}
+	exeDir := filepath.Dir(exePath)
+	uri := storage.NewFileURI(exeDir)
+	lister, err := storage.ListerForURI(uri)
+	if err != nil {
+		return nil
+	}
+	return lister
 }
 
 func (e *editorApp) updateStickyHeader() {
@@ -1143,6 +1158,9 @@ func (e *editorApp) openFile() {
 		e.updatePreview()
 		r.Close()
 	}, e.window)
+	if l := e.getExeDir(); l != nil {
+		d.SetLocation(l)
+	}
 	d.SetFilter(storage.NewExtensionFileFilter([]string{".md", ".mermaid", ".txt"}))
 	d.Show()
 }
@@ -1173,6 +1191,9 @@ func (e *editorApp) saveAsFile() {
 		e.statusLabel.SetText("Saved As: " + e.currentFile.Name())
 		w.Close()
 	}, e.window)
+	if l := e.getExeDir(); l != nil {
+		d.SetLocation(l)
+	}
 	d.SetFileName("diagram.md")
 	d.Show()
 }
@@ -1303,12 +1324,14 @@ func (e *editorApp) exportPNG() {
 			})
 		}()
 	}, e.window)
+	if l := e.getExeDir(); l != nil {
+		d.SetLocation(l)
+	}
 	d.SetFileName("diagram.png")
 	d.Show()
-	}
+}
 
-	func (e *editorApp) insertSnippet(snippet string) {
-
+func (e *editorApp) insertSnippet(snippet string) {
 	e.entry.SetText(e.entry.Text + "\n" + snippet)
 	e.updatePreview()
 }
