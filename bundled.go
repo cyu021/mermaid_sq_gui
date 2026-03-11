@@ -21,3 +21,10 @@ var resourceNotoSansCJKkrBoldOtf = &fyne.StaticResource{
 	StaticName:    "NotoSansCJKkr-Bold.otf",
 	StaticContent: resourceNotoSansCJKkrBoldOtfData,
 }
+
+//go:embed icon.png
+var resourceIconPngData []byte
+var resourceIconPng = &fyne.StaticResource{
+	StaticName:    "icon.png",
+	StaticContent: resourceIconPngData,
+}

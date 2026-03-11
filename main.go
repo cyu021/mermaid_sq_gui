@@ -1614,6 +1614,7 @@ func main() {
 	myApp.Settings().SetTheme(&cjkTheme{Theme: theme.DarkTheme(), font: themeFont})
 	
 	myWindow := myApp.NewWindow("Mermaid Sequence Diagram Editor")
+	myWindow.SetIcon(resourceIconPng)
 
 	e := &editorApp{
 		window: myWindow,
