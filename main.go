@@ -261,7 +261,7 @@ func (e *editorApp) drawStickyHeader() {
 }
 
 func (e *editorApp) showScalingInfo() {
-	s := fmt.Sprintf("Cross-Platform Scaling - OS: %s\nDetected OS Scale: %.2f\nApplied Zoom Scale: %.2f\n\nFyne Canvas Raw Scale: %f\nFYNE_SCALE Env: %s",
+	s := fmt.Sprintf("Cross-Platform Scaling - OS: %s\nDetected OS Scale: %.2f\nApplied Zoom Scale: %.2f (Internal)\n\nFyne Canvas Raw Scale: %f\nFYNE_SCALE Env: %s",
 		runtime.GOOS, e.detectedOSScale, e.zoomScale, e.window.Canvas().Scale(), os.Getenv("FYNE_SCALE"))
 	dialog.ShowInformation("UI Scaling Info", s, e.window)
 }
@@ -1738,21 +1738,23 @@ func main() {
 			}
 
 			e.detectedOSScale = osScale
-			logMsg(fmt.Sprintf("Cross-Platform Scaling - OS: %s, Detected OS Scale: %.2f, Applying zoom: %.2f", runtime.GOOS, osScale, calculatedScale))
+			logMsg(fmt.Sprintf("Scaling - OS: %s, Detected OS Scale: %.2f", runtime.GOOS, osScale))
 
 			// Fyne UI updates MUST happen on the main thread
 			fyne.Do(func() {
-				e.zoomScale = float32(calculatedScale)
+				// Use 1.0 as the base zoom factor to match mermaid-md-gui's behavior
+				e.zoomScale = 1.0
 				if e.window != nil && e.window.Content() != nil {
 					e.window.Content().Refresh()
 					e.updatePreview()
 				}
 			})
 		} else {
-			// If FYNE_SCALE is provided, we don't calculate or apply our own zoom logic
-			// But we still store the detected scale for info
+			// If FYNE_SCALE is provided, we still use 1.0 as our internal zoomScale
+			// because FYNE_SCALE already scales the entire coordinate system.
 			e.detectedOSScale = float64(myWindow.Canvas().Scale())
-			logMsg(fmt.Sprintf("FYNE_SCALE detected: %s. Skipping automatic zoom calculation.", os.Getenv("FYNE_SCALE")))
+			e.zoomScale = 1.0
+			logMsg(fmt.Sprintf("FYNE_SCALE detected: %s. Using default internal scale.", os.Getenv("FYNE_SCALE")))
 		}
 	}()
 
