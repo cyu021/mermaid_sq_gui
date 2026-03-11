@@ -29,21 +29,24 @@ New & Updated Features:
     all its related messages/notes.
 10. Ink-Saving PNG Export: High-fidelity, print-optimized PNG export with 
     automatic color correction for white backgrounds.
-11. Unicode Support: Full support for multi-language text (CJK) using system 
-    fallback fonts.
+11. Unicode Support: Full support for multi-language text (CJK) using bundled 
+    Noto Sans CJK KR fonts, ensuring consistent rendering across all platforms.
+12. Manual Path Entry Dialogs: Enter absolute file paths directly or use standard 
+    file browsing for robust cross-platform file saving/loading, with automatic 
+    sanitization for backslashes and Won symbols.
 
 Build Commands (optimized for WSL/Linux):
 -----------------------------------------
 Ensure you have Go 1.21+ and Fyne dependencies installed.
 
 - Linux (native or WSL):
-  NPROC=$(nproc); GOMAX=$((NPROC > 2 ? NPROC - 2 : 1)); go build -v -p $GOMAX -o mermaid-sq-gui main.go
+  NPROC=$(nproc); GOMAX=$((NPROC > 2 ? NPROC - 2 : 1)); go build -v -p $GOMAX -o mermaid-sq-gui .
 
 - Windows (cross-compile from WSL/Linux):
-  NPROC=$(nproc); GOMAX=$((NPROC > 2 ? NPROC - 2 : 1)); GOOS=windows GOARCH=amd64 CGO_ENABLED=1 CC=x86_64-w64-mingw32-gcc go build -v -p $GOMAX -ldflags="-s -w -extldflags=-static -H=windowsgui" -o mermaid-sq-gui.exe main.go
+  NPROC=$(nproc); GOMAX=$((NPROC > 2 ? NPROC - 2 : 1)); GOOS=windows GOARCH=amd64 CGO_ENABLED=1 CC=x86_64-w64-mingw32-gcc go build -v -p $GOMAX -ldflags="-s -w -extldflags=-static -H=windowsgui" -o mermaid-sq-gui.exe .
 
 - macOS:
-  go build -o mermaid-sq-gui main.go
+  go build -o mermaid-sq-gui .
 
 How to Set UI Scaling (FYNE_SCALE):
 -----------------------------------
@@ -75,6 +78,14 @@ Dependencies:
 -------------
 - Fyne v2.7.3
 - Go 1.21+
+
+System Requirements:
+--------------------
+- Operating System: Windows, Linux, or macOS.
+- Dependencies: Requires a C compiler (gcc) for Fyne/Go compilation.
+- Font Prerequisites: NotoSansCJKkr-Regular.otf and NotoSansCJKkr-Bold.otf (Required by bundled.go). Retrieve them via:
+    wget https://github.com/googlefonts/noto-cjk/raw/main/Sans/OTF/Korean/NotoSansCJKkr-Bold.otf
+    wget https://github.com/googlefonts/noto-cjk/raw/main/Sans/OTF/Korean/NotoSansCJKkr-Regular.otf
 
 Built for developers who need a fast, local way to design sequence diagrams 
 without relying on web-based editors.

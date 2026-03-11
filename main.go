@@ -6,8 +6,8 @@ import (
 	"image/color"
 	"image/draw"
 	"image/png"
-	"io"
 	"os"
+	"os/exec"
 	"regexp"
 	"runtime"
 	"strings"
@@ -24,7 +24,6 @@ import (
 	"golang.org/x/image/font"
 	"golang.org/x/image/font/opentype"
 	"golang.org/x/image/math/fixed"
-	"os/exec"
 	"path/filepath"
 	"time"
 )
@@ -39,9 +38,7 @@ func logMsg(msg string) {
 	if idx := strings.LastIndex(fn, "."); idx != -1 {
 		fn = fn[idx+1:]
 	}
-	if idx := strings.LastIndex(file, "/"); idx != -1 {
-		file = file[idx+1:]
-	}
+	file = filepath.Base(file)
 	fmt.Printf("[%s] %s (%s:%d) - %s\n", time.Now().Format("2006-01-02 15:04:05.000"), fn, file, line, msg)
 }
 
@@ -1145,24 +1142,78 @@ func (e *editorApp) newFile() {
 	e.updatePreview()
 }
 
+func sanitizePath(p string) string {
+	p = strings.ReplaceAll(p, "₩", "\\")
+	return filepath.Clean(p)
+}
+
+func (e *editorApp) showManualPathDialog(title, defaultName string, isSave bool, onConfirm func(string)) {
+	pathEntry := widget.NewEntry()
+	pathEntry.SetPlaceHolder("Enter absolute path here...")
+	if defaultName != "" && isSave {
+		if l := e.getExeDir(); l != nil {
+			pathEntry.SetText(filepath.Join(l.Path(), defaultName))
+		} else {
+			pathEntry.SetText(defaultName)
+		}
+	}
+
+	browseBtn := widget.NewButton("Browse", func() {
+		if isSave {
+			d := dialog.NewFileSave(func(w fyne.URIWriteCloser, err error) {
+				if w != nil {
+					pathEntry.SetText(w.URI().Path())
+					w.Close()
+				}
+			}, e.window)
+			if l := e.getExeDir(); l != nil {
+				d.SetLocation(l)
+			}
+			d.SetFileName(defaultName)
+			d.Show()
+		} else {
+			d := dialog.NewFileOpen(func(r fyne.URIReadCloser, err error) {
+				if r != nil {
+					pathEntry.SetText(r.URI().Path())
+					r.Close()
+				}
+			}, e.window)
+			if l := e.getExeDir(); l != nil {
+				d.SetLocation(l)
+			}
+			d.Show()
+		}
+	})
+
+	content := container.NewVBox(
+		widget.NewLabel("Path:"),
+		pathEntry,
+		browseBtn,
+	)
+
+	d := dialog.NewCustomConfirm(title, "OK", "Cancel", content, func(b bool) {
+		if b && pathEntry.Text != "" {
+			onConfirm(pathEntry.Text)
+		}
+	}, e.window)
+	d.Resize(fyne.NewSize(500, 200))
+	d.Show()
+}
+
 func (e *editorApp) openFile() {
-	d := dialog.NewFileOpen(func(r fyne.URIReadCloser, err error) {
-		if err != nil || r == nil {
+	e.showManualPathDialog("Open File", "", false, func(path string) {
+		path = sanitizePath(path)
+		data, err := os.ReadFile(path)
+		if err != nil {
+			dialog.ShowError(err, e.window)
 			return
 		}
-		data, _ := io.ReadAll(r)
 		e.entry.SetText(string(data))
-		e.currentFile = r.URI()
-		e.window.SetTitle("Mermaid Sequence Diagram Editor - " + e.currentFile.Name())
-		e.statusLabel.SetText("Opened: " + e.currentFile.Name())
+		e.currentFile = storage.NewFileURI(path)
+		e.window.SetTitle("Mermaid Sequence Diagram Editor - " + filepath.Base(path))
+		e.statusLabel.SetText("Opened: " + filepath.Base(path))
 		e.updatePreview()
-		r.Close()
-	}, e.window)
-	if l := e.getExeDir(); l != nil {
-		d.SetLocation(l)
-	}
-	d.SetFilter(storage.NewExtensionFileFilter([]string{".md", ".mermaid", ".txt"}))
-	d.Show()
+	})
 }
 
 func (e *editorApp) saveFile() {
@@ -1170,165 +1221,163 @@ func (e *editorApp) saveFile() {
 		e.saveAsFile()
 		return
 	}
-	w, err := storage.Writer(e.currentFile)
+	path := sanitizePath(e.currentFile.Path())
+	err := os.WriteFile(path, []byte(e.entry.Text), 0644)
 	if err != nil {
 		dialog.ShowError(err, e.window)
 		return
 	}
-	w.Write([]byte(e.entry.Text))
-	w.Close()
-	e.statusLabel.SetText("Saved: " + e.currentFile.Name())
+	e.statusLabel.SetText("Saved: " + filepath.Base(path))
 }
 
 func (e *editorApp) saveAsFile() {
-	d := dialog.NewFileSave(func(w fyne.URIWriteCloser, err error) {
-		if err != nil || w == nil {
+	e.showManualPathDialog("Save As", "diagram.md", true, func(path string) {
+		path = sanitizePath(path)
+		err := os.WriteFile(path, []byte(e.entry.Text), 0644)
+		if err != nil {
+			dialog.ShowError(err, e.window)
 			return
 		}
-		w.Write([]byte(e.entry.Text))
-		e.currentFile = w.URI()
-		e.window.SetTitle("Mermaid Sequence Diagram Editor - " + e.currentFile.Name())
-		e.statusLabel.SetText("Saved As: " + e.currentFile.Name())
-		w.Close()
-	}, e.window)
-	if l := e.getExeDir(); l != nil {
-		d.SetLocation(l)
-	}
-	d.SetFileName("diagram.md")
-	d.Show()
+		e.currentFile = storage.NewFileURI(path)
+		e.window.SetTitle("Mermaid Sequence Diagram Editor - " + filepath.Base(path))
+		e.statusLabel.SetText("Saved As: " + filepath.Base(path))
+	})
 }
 
 func (e *editorApp) exportPNG() {
-	d := dialog.NewFileSave(func(w fyne.URIWriteCloser, err error) {
-		if err != nil || w == nil {
+	e.showManualPathDialog("Export PNG", "diagram.png", true, func(path string) {
+		path = sanitizePath(path)
+		
+		outW := int(e.diagramSize.Width)
+		outH := int(e.diagramSize.Height)
+		if outW <= 0 || outH <= 0 {
 			return
 		}
-		go func() {
-			defer w.Close()
-			outW := int(e.diagramSize.Width)
-			outH := int(e.diagramSize.Height)
-			if outW <= 0 || outH <= 0 {
-				return
-			}
-			img := image.NewRGBA(image.Rect(0, 0, outW, outH))
-			bgCol := color.White
-			draw.Draw(img, img.Bounds(), &image.Uniform{bgCol}, image.Point{}, draw.Src)
+		img := image.NewRGBA(image.Rect(0, 0, outW, outH))
+		bgCol := color.White
+		draw.Draw(img, img.Bounds(), &image.Uniform{bgCol}, image.Point{}, draw.Src)
 
-			var fP *opentype.Font
-			var fFs []*opentype.Font
-			var objs []fyne.CanvasObject
-			fyne.DoAndWait(func() {
-				fP, fFs = getOpentypeFonts()
-				objs = make([]fyne.CanvasObject, len(e.renderArea.Objects))
-				copy(objs, e.renderArea.Objects)
-			})
+		var fP *opentype.Font
+		var fFs []*opentype.Font
+		var objs []fyne.CanvasObject
+		fyne.DoAndWait(func() {
+			fP, fFs = getOpentypeFonts()
+			objs = make([]fyne.CanvasObject, len(e.renderArea.Objects))
+			copy(objs, e.renderArea.Objects)
+		})
 
-			for _, obj := range objs {
-				switch v := obj.(type) {
-				case *canvas.Line:
-					var p1, p2 fyne.Position
-					var col color.Color
-					var sw float32
-					fyne.DoAndWait(func() {
-						p1, p2, col, sw = v.Position1, v.Position2, v.StrokeColor, v.StrokeWidth
-					})
-					x1, y1 := int(p1.X), int(p1.Y)
-					x2, y2 := int(p2.X), int(p2.Y)
-					th := int(sw)
-					if th < 1 {
-						th = 1
-					}
-					// Force visible color on white background if it's too light
-					if isLight(col) {
-						col = color.Black
-					}
-					drawLine(img, x1, y1, x2, y2, th, col)
-				case *canvas.Rectangle:
-					var pos fyne.Position
-					var size fyne.Size
-					var fc, sc color.Color
-					var sw float32
-					fyne.DoAndWait(func() {
-						pos, size, fc, sc, sw = v.Position(), v.Size(), v.FillColor, v.StrokeColor, v.StrokeWidth
-					})
-					x, y := int(pos.X), int(pos.Y)
-					w, h := int(size.Width), int(size.Height)
-					th := int(sw)
-					if fc != nil && fc != color.Transparent {
-						// Force white fill for ink saving
-						fc = color.White
-						rect := image.Rect(x, y, x+w, y+h)
-						draw.Draw(img, rect, &image.Uniform{fc}, image.Point{}, draw.Src)
-					}
-					if sc != nil && sc != color.Transparent && th > 0 {
-						// Ensure border is visible on white background
-						if isLight(sc) {
-							sc = color.Black
-						}
-						drawLine(img, x, y, x+w, y, th, sc)
-						drawLine(img, x+w, y, x+w, y+h, th, sc)
-						drawLine(img, x+w, y+h, x, y+h, th, sc)
-						drawLine(img, x, y+h, x, y, th, sc)
-					}
-				case *canvas.Text:
-					var pos fyne.Position
-					var size fyne.Size
-					var col color.Color
-					var ts float32
-					var align fyne.TextAlign
-					var text string
-					fyne.DoAndWait(func() {
-						pos, size, col, ts, align, text = v.Position(), v.Size(), v.Color, v.TextSize, v.Alignment, v.Text
-					})
-					x, y := float64(pos.X), float64(pos.Y)
-					if col == nil || isLight(col) {
-						col = color.Black
-					}
-					fs := float64(ts)
-					baselineY := y + fs*0.8
-
-					fPR, errPR := opentype.NewFace(fP, &opentype.FaceOptions{Size: fs, DPI: 72})
-					if errPR != nil {
-						logMsg(fmt.Sprintf("ERROR: Failed to create Latin font face: %v", errPR))
-					}
-					
-					var fFRs []font.Face
-					for i, fF := range fFs {
-						face, err := opentype.NewFace(fF, &opentype.FaceOptions{Size: fs, DPI: 72})
-						if err != nil {
-							logMsg(fmt.Sprintf("ERROR: Failed to create Fallback font face %d: %v", i, err))
-							continue
-						}
-						fFRs = append(fFRs, face)
-					}
-
-					// Use the composite measurement for accurate centering
-					if align == fyne.TextAlignCenter {
-						tw := measureCompositeString(text, fPR, fFRs)
-						boxW := float64(size.Width)
-						x = x + (boxW-tw)/2
-					}
-
-					drawCompositeString(img, text, x, baselineY, fPR, fFRs, col)
-				}
-			}
-
-			err = png.Encode(w, img)
-			if err != nil {
+		for _, obj := range objs {
+			switch v := obj.(type) {
+			case *canvas.Line:
+				var p1, p2 fyne.Position
+				var col color.Color
+				var sw float32
 				fyne.DoAndWait(func() {
-					dialog.ShowError(err, e.window)
+					p1, p2, col, sw = v.Position1, v.Position2, v.StrokeColor, v.StrokeWidth
 				})
+				x1, y1 := int(p1.X), int(p1.Y)
+				x2, y2 := int(p2.X), int(p2.Y)
+				th := int(sw)
+				if th < 1 {
+					th = 1
+				}
+				if isLight(col) {
+					col = color.Black
+				}
+				drawLine(img, x1, y1, x2, y2, th, col)
+			case *canvas.Rectangle:
+				var pos fyne.Position
+				var size fyne.Size
+				var fc, sc color.Color
+				var sw float32
+				fyne.DoAndWait(func() {
+					pos, size, fc, sc, sw = v.Position(), v.Size(), v.FillColor, v.StrokeColor, v.StrokeWidth
+				})
+				x, y := int(pos.X), int(pos.Y)
+				w, h := int(size.Width), int(size.Height)
+				th := int(sw)
+				if fc != nil && fc != color.Transparent {
+					fc = color.White
+					rect := image.Rect(x, y, x+w, y+h)
+					draw.Draw(img, rect, &image.Uniform{fc}, image.Point{}, draw.Src)
+				}
+				if sc != nil && sc != color.Transparent && th > 0 {
+					if isLight(sc) {
+						sc = color.Black
+					}
+					drawLine(img, x, y, x+w, y, th, sc)
+					drawLine(img, x+w, y, x+w, y+h, th, sc)
+					drawLine(img, x+w, y+h, x, y+h, th, sc)
+					drawLine(img, x, y+h, x, y, th, sc)
+				}
+			case *canvas.Text:
+				var pos fyne.Position
+				var size fyne.Size
+				var col color.Color
+				var ts float32
+				var align fyne.TextAlign
+				var text string
+				var style fyne.TextStyle
+				fyne.DoAndWait(func() {
+					pos, size, col, ts, align, text, style = v.Position(), v.Size(), v.Color, v.TextSize, v.Alignment, v.Text, v.TextStyle
+				})
+				x, y := float64(pos.X), float64(pos.Y)
+				if col == nil || isLight(col) {
+					col = color.Black
+				}
+				fs := float64(ts)
+				baselineY := y + fs*0.8
+
+				fPR, errPR := opentype.NewFace(fP, &opentype.FaceOptions{Size: fs, DPI: 72})
+				if errPR != nil {
+					logMsg(fmt.Sprintf("ERROR: Failed to create Latin font face: %v", errPR))
+				}
+				
+				var fFRs []font.Face
+				// Prioritize bold fallback if style is bold
+				orderedFs := fFs
+				if style.Bold && len(fFs) > 1 {
+					orderedFs = []*opentype.Font{fFs[1], fFs[0]}
+				}
+
+				for i, fF := range orderedFs {
+					face, err := opentype.NewFace(fF, &opentype.FaceOptions{Size: fs, DPI: 72})
+					if err != nil {
+						logMsg(fmt.Sprintf("ERROR: Failed to create Fallback font face %d: %v", i, err))
+						continue
+					}
+					fFRs = append(fFRs, face)
+				}
+
+				if align == fyne.TextAlignCenter {
+					tw := measureCompositeString(text, fPR, fFRs)
+					boxW := float64(size.Width)
+					x = x + (boxW-tw)/2
+				}
+
+				drawCompositeString(img, text, x, baselineY, fPR, fFRs, col)
 			}
+		}
+
+		f, err := os.Create(path)
+		if err != nil {
 			fyne.DoAndWait(func() {
-				e.statusLabel.SetText("Exported PNG: " + w.URI().Name())
+				dialog.ShowError(err, e.window)
 			})
-		}()
-	}, e.window)
-	if l := e.getExeDir(); l != nil {
-		d.SetLocation(l)
-	}
-	d.SetFileName("diagram.png")
-	d.Show()
+			return
+		}
+		defer f.Close()
+
+		err = png.Encode(f, img)
+		if err != nil {
+			fyne.DoAndWait(func() {
+				dialog.ShowError(err, e.window)
+			})
+		}
+		fyne.DoAndWait(func() {
+			e.statusLabel.SetText("Exported PNG: " + filepath.Base(path))
+		})
+	})
 }
 
 func (e *editorApp) insertSnippet(snippet string) {
@@ -1341,87 +1390,27 @@ func colorToRGB(c color.Color) (int, int, int) {
 	return int(r >> 8), int(g >> 8), int(b >> 8)
 }
 
-func getFallbackFontData(allowCollections bool) [][]byte {
-	var result [][]byte
-	
-	// Dynamically determine Windows font directory
-	winDir := os.Getenv("SystemRoot")
-	if winDir == "" {
-		winDir = os.Getenv("WINDIR")
-	}
-	if winDir == "" {
-		winDir = "C:\\Windows"
-	}
-	logMsg(fmt.Sprintf("System Discovery - Windows Dir: %s", winDir))
-	winFonts := winDir + "\\Fonts\\"
-
-	// Comprehensive list of possible paths for WSL and Native Windows
-	loaded := make(map[string]bool)
-	
-	paths := []string{
-		// Native Windows Paths (Primary for native usage)
-		winFonts + "malgun.ttf",   // Prioritize Malgun for Korean
-		winFonts + "msyh.ttc",     // Microsoft YaHei for Chinese
-		winFonts + "msyh.ttf",
-		winFonts + "simsun.ttc",
-		winFonts + "msgothic.ttc",
-		
-		// WSL Mount Points (Primary for WSL usage)
-		"/c/Windows/Fonts/malgun.ttf",
-		"/c/Windows/Fonts/msyh.ttc",
-		"/c/Windows/Fonts/simsun.ttc",
-		
-		// Linux Native Paths
-		"/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc",
-		"/usr/share/fonts/truetype/droid/DroidSansFallbackFull.ttf",
-		"/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
-	}
-
-	for _, p := range paths {
-		if !allowCollections && strings.HasSuffix(p, ".ttc") {
-			continue
-		}
-		if loaded[p] {
-			continue
-		}
-		
-		if data, err := os.ReadFile(p); err == nil {
-			logMsg(fmt.Sprintf("SUCCESS: Loaded fallback font [%v]: %s", allowCollections, p))
-			result = append(result, data)
-			loaded[p] = true
-			if !allowCollections && len(result) >= 1 {
-				break // Theme only needs one .ttf
-			}
-		}
-	}
-	
-	if len(result) == 0 {
-		logMsg(fmt.Sprintf("CRITICAL: No fallback fonts found for allowCollections=%v", allowCollections))
-	}
-	
-	return result
-}
-
 func getOpentypeFonts() (*opentype.Font, []*opentype.Font) {
 	fP, err := opentype.Parse(theme.DefaultTextFont().Content())
 	if err != nil {
 		logMsg(fmt.Sprintf("CRITICAL: Failed to parse primary font: %v", err))
 	}
-	
+
 	var fallbacks []*opentype.Font
-	dataList := getFallbackFontData(true)
-	for _, data := range dataList {
-		if coll, err := opentype.ParseCollection(data); err == nil {
-			for i := 0; i < coll.NumFonts(); i++ {
-				if f, err := coll.Font(i); err == nil {
-					fallbacks = append(fallbacks, f)
-					break // Just take the first font from the collection for now
-				}
-			}
-		} else if f, err := opentype.Parse(data); err == nil {
-			fallbacks = append(fallbacks, f)
-		}
+	f, err := opentype.Parse(resourceNotoSansCJKkrRegularOtf.Content())
+	if err == nil {
+		fallbacks = append(fallbacks, f)
+	} else {
+		logMsg(fmt.Sprintf("ERROR: Failed to parse bundled Regular font: %v", err))
 	}
+
+	fb, err := opentype.Parse(resourceNotoSansCJKkrBoldOtf.Content())
+	if err == nil {
+		fallbacks = append(fallbacks, fb)
+	} else {
+		logMsg(fmt.Sprintf("ERROR: Failed to parse bundled Bold font: %v", err))
+	}
+
 	return fP, fallbacks
 }
 
@@ -1603,17 +1592,8 @@ func (t *cjkTheme) Size(name fyne.ThemeSizeName) float32 {
 func main() {
 	myApp := app.NewWithID("com.mermaid.sq.gui")
 	
-	// Load CJK font for the UI theme (TTF only)
-	cjkFontDataList := getFallbackFontData(false)
-	var cjkFontData []byte
-	if len(cjkFontDataList) > 0 {
-		cjkFontData = cjkFontDataList[0]
-	} else {
-		cjkFontData = theme.DefaultTextFont().Content()
-	}
-	
-	// Fyne's internal theme system doesn't support .ttc. 
-	themeFont := fyne.NewStaticResource("CJKFont.ttf", cjkFontData)
+	// Load CJK font for the UI theme
+	themeFont := resourceNotoSansCJKkrRegularOtf
 	
 	myApp.Settings().SetTheme(&cjkTheme{Theme: theme.DarkTheme(), font: themeFont})
 	
