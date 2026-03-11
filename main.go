@@ -272,6 +272,22 @@ func (e *editorApp) drawStickyHeader() {
 	e.stickyHeader.Refresh()
 }
 
+func (e *editorApp) zoomIn() {
+	e.zoomScale += 0.1
+	if e.zoomScale > 3.0 {
+		e.zoomScale = 3.0
+	}
+	e.updatePreview()
+}
+
+func (e *editorApp) zoomOut() {
+	e.zoomScale -= 0.1
+	if e.zoomScale < 0.1 {
+		e.zoomScale = 0.1
+	}
+	e.updatePreview()
+}
+
 func (e *editorApp) showScalingInfo() {
 	s := fmt.Sprintf("Cross-Platform Scaling - OS: %s\nDetected OS Scale: %.2f\nApplied Zoom Scale: %.2f (Internal)\n\nFyne Canvas Raw Scale: %f\nFYNE_SCALE Env: %s",
 		runtime.GOOS, e.detectedOSScale, e.zoomScale, e.window.Canvas().Scale(), os.Getenv("FYNE_SCALE"))
@@ -1633,6 +1649,9 @@ func main() {
 		fyne.NewMenuItemSeparator(),
 		fyne.NewMenuItem("Export PNG", e.exportPNG),
 		fyne.NewMenuItemSeparator(),
+		fyne.NewMenuItem("Zoom In", e.zoomIn),
+		fyne.NewMenuItem("Zoom Out", e.zoomOut),
+		fyne.NewMenuItemSeparator(),
 		fyne.NewMenuItem("UI Scaling Info", e.showScalingInfo),
 		fyne.NewMenuItemSeparator(),
 		fyne.NewMenuItem("Exit", func() { os.Exit(0) }),
@@ -1658,6 +1677,9 @@ func main() {
 		newToolBtn(theme.FileIcon(), "Open", e, e.openFile),
 		newToolBtn(theme.DocumentSaveIcon(), "Save", e, e.saveFile),
 		newToolBtn(theme.DownloadIcon(), "Export PNG", e, e.exportPNG),
+		widget.NewSeparator(),
+		newToolBtn(theme.ZoomInIcon(), "Zoom In", e, e.zoomIn),
+		newToolBtn(theme.ZoomOutIcon(), "Zoom Out", e, e.zoomOut),
 		widget.NewSeparator(),
 		newToolBtn(theme.ContentAddIcon(), "Add Participant", e, func() {
 			e.insertSnippet("    participant NewActor")
