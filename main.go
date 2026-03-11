@@ -766,11 +766,17 @@ func (e *editorApp) drawElements(elements []DiagramElement, startY float32, msgC
 				var nx, ny, nw, nh float32
 				nh = 30 * e.zoomScale
 				ny = y - nh/2
+
+				// Create temporary text to measure min size
+				tmpTxt := canvas.NewText(v.Text, color.Black)
+				tmpTxt.TextSize = 11 * e.zoomScale
+				minW := tmpTxt.MinSize().Width + 20*e.zoomScale
+
 				if v.Type == "left of" {
-					nw = 100 * e.zoomScale
+					nw = minW
 					nx = x1 - nw - 10*e.zoomScale
 				} else if v.Type == "right of" {
-					nw = 100 * e.zoomScale
+					nw = minW
 					nx = x1 + 10*e.zoomScale
 				} else if v.Type == "over" {
 					if v.Actor2 != "" {
@@ -782,12 +788,18 @@ func (e *editorApp) drawElements(elements []DiagramElement, startY float32, msgC
 							}
 							nx = x1 - 20*e.zoomScale
 							nw = (x2 - x1) + 40*e.zoomScale
+							// If text is wider than participant gap, expand note
+							if minW > nw {
+								diff := minW - nw
+								nx -= diff / 2
+								nw = minW
+							}
 						} else {
-							nw = 100 * e.zoomScale
+							nw = minW
 							nx = x1 - nw/2
 						}
 					} else {
-						nw = 100 * e.zoomScale
+						nw = minW
 						nx = x1 - nw/2
 					}
 				}
@@ -1181,10 +1193,11 @@ func (e *editorApp) exportPNG() {
 			bgCol := color.White
 			draw.Draw(img, img.Bounds(), &image.Uniform{bgCol}, image.Point{}, draw.Src)
 
-			var fP, fF *opentype.Font
+			var fP *opentype.Font
+			var fFs []*opentype.Font
 			var objs []fyne.CanvasObject
 			fyne.DoAndWait(func() {
-				fP, fF = getOpentypeFonts()
+				fP, fFs = getOpentypeFonts()
 				objs = make([]fyne.CanvasObject, len(e.renderArea.Objects))
 				copy(objs, e.renderArea.Objects)
 			})
@@ -1238,13 +1251,13 @@ func (e *editorApp) exportPNG() {
 					}
 				case *canvas.Text:
 					var pos fyne.Position
-					var size, minSize fyne.Size
+					var size fyne.Size
 					var col color.Color
 					var ts float32
 					var align fyne.TextAlign
 					var text string
 					fyne.DoAndWait(func() {
-						pos, size, minSize, col, ts, align, text = v.Position(), v.Size(), v.MinSize(), v.Color, v.TextSize, v.Alignment, v.Text
+						pos, size, col, ts, align, text = v.Position(), v.Size(), v.Color, v.TextSize, v.Alignment, v.Text
 					})
 					x, y := float64(pos.X), float64(pos.Y)
 					if col == nil || isLight(col) {
@@ -1253,16 +1266,29 @@ func (e *editorApp) exportPNG() {
 					fs := float64(ts)
 					baselineY := y + fs*0.8
 
-					fPR, _ := opentype.NewFace(fP, &opentype.FaceOptions{Size: fs, DPI: 72})
-					fFR, _ := opentype.NewFace(fF, &opentype.FaceOptions{Size: fs, DPI: 72})
+					fPR, errPR := opentype.NewFace(fP, &opentype.FaceOptions{Size: fs, DPI: 72})
+					if errPR != nil {
+						logMsg(fmt.Sprintf("ERROR: Failed to create Latin font face: %v", errPR))
+					}
+					
+					var fFRs []font.Face
+					for i, fF := range fFs {
+						face, err := opentype.NewFace(fF, &opentype.FaceOptions{Size: fs, DPI: 72})
+						if err != nil {
+							logMsg(fmt.Sprintf("ERROR: Failed to create Fallback font face %d: %v", i, err))
+							continue
+						}
+						fFRs = append(fFRs, face)
+					}
 
+					// Use the composite measurement for accurate centering
 					if align == fyne.TextAlignCenter {
-						tw := float64(minSize.Width)
+						tw := measureCompositeString(text, fPR, fFRs)
 						boxW := float64(size.Width)
 						x = x + (boxW-tw)/2
 					}
 
-					drawCompositeString(img, text, x, baselineY, fPR, fFR, col)
+					drawCompositeString(img, text, x, baselineY, fPR, fFRs, col)
 				}
 			}
 
@@ -1292,50 +1318,158 @@ func colorToRGB(c color.Color) (int, int, int) {
 	return int(r >> 8), int(g >> 8), int(b >> 8)
 }
 
-func getFallbackFontData() []byte {
+func getFallbackFontData(allowCollections bool) [][]byte {
+	var result [][]byte
+	
+	// Dynamically determine Windows font directory
+	winDir := os.Getenv("SystemRoot")
+	if winDir == "" {
+		winDir = os.Getenv("WINDIR")
+	}
+	if winDir == "" {
+		winDir = "C:\\Windows"
+	}
+	logMsg(fmt.Sprintf("System Discovery - Windows Dir: %s", winDir))
+	winFonts := winDir + "\\Fonts\\"
+
+	// Comprehensive list of possible paths for WSL and Native Windows
+	loaded := make(map[string]bool)
+	
 	paths := []string{
-		"/usr/share/fonts/truetype/droid/DroidSansFallbackFull.ttf",
+		// Native Windows Paths (Primary for native usage)
+		winFonts + "malgun.ttf",   // Prioritize Malgun for Korean
+		winFonts + "msyh.ttc",     // Microsoft YaHei for Chinese
+		winFonts + "msyh.ttf",
+		winFonts + "simsun.ttc",
+		winFonts + "msgothic.ttc",
+		
+		// WSL Mount Points (Primary for WSL usage)
+		"/c/Windows/Fonts/malgun.ttf",
+		"/c/Windows/Fonts/msyh.ttc",
+		"/c/Windows/Fonts/simsun.ttc",
+		
+		// Linux Native Paths
 		"/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc",
-		"/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-		"C:\\\\Windows\\\\Fonts\\\\msyh.ttc",
+		"/usr/share/fonts/truetype/droid/DroidSansFallbackFull.ttf",
+		"/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
 	}
+
 	for _, p := range paths {
+		if !allowCollections && strings.HasSuffix(p, ".ttc") {
+			continue
+		}
+		if loaded[p] {
+			continue
+		}
+		
 		if data, err := os.ReadFile(p); err == nil {
-			return data
+			logMsg(fmt.Sprintf("SUCCESS: Loaded fallback font [%v]: %s", allowCollections, p))
+			result = append(result, data)
+			loaded[p] = true
+			if !allowCollections && len(result) >= 1 {
+				break // Theme only needs one .ttf
+			}
 		}
 	}
-	return theme.DefaultTextFont().Content()
+	
+	if len(result) == 0 {
+		logMsg(fmt.Sprintf("CRITICAL: No fallback fonts found for allowCollections=%v", allowCollections))
+	}
+	
+	return result
 }
 
-func getOpentypeFonts() (*opentype.Font, *opentype.Font) {
-	fP, _ := opentype.Parse(theme.DefaultTextFont().Content())
-	dataF := getFallbackFontData()
-	var fF *opentype.Font
-	if coll, err := opentype.ParseCollection(dataF); err == nil {
-		fF, _ = coll.Font(0)
-	} else {
-		fF, _ = opentype.Parse(dataF)
+func getOpentypeFonts() (*opentype.Font, []*opentype.Font) {
+	fP, err := opentype.Parse(theme.DefaultTextFont().Content())
+	if err != nil {
+		logMsg(fmt.Sprintf("CRITICAL: Failed to parse primary font: %v", err))
 	}
-	if fF == nil {
-		fF = fP
+	
+	var fallbacks []*opentype.Font
+	dataList := getFallbackFontData(true)
+	for _, data := range dataList {
+		if coll, err := opentype.ParseCollection(data); err == nil {
+			for i := 0; i < coll.NumFonts(); i++ {
+				if f, err := coll.Font(i); err == nil {
+					fallbacks = append(fallbacks, f)
+					break // Just take the first font from the collection for now
+				}
+			}
+		} else if f, err := opentype.Parse(data); err == nil {
+			fallbacks = append(fallbacks, f)
+		}
 	}
-	return fP, fF
+	return fP, fallbacks
 }
 
-func drawCompositeString(img draw.Image, txt string, x, y float64, fP, fF font.Face, col color.Color) {
+func isKorean(r rune) bool {
+	// Hangul Syllables, Jamo, and Compatibility Jamo
+	return (r >= 0xAC00 && r <= 0xD7AF) || (r >= 0x1100 && r <= 0x11FF) || (r >= 0x3130 && r <= 0x318F)
+}
+
+func drawCompositeString(img draw.Image, txt string, x, y float64, fP font.Face, fallbacks []font.Face, col color.Color) {
 	dP := &font.Drawer{Dst: img, Src: image.NewUniform(col), Face: fP}
-	dF := &font.Drawer{Dst: img, Src: image.NewUniform(col), Face: fF}
 	dP.Dot = fixed.Point26_6{X: fixed.Int26_6(x * 64), Y: fixed.Int26_6(y * 64)}
-	dF.Dot = dP.Dot
+	
+	drawers := make([]*font.Drawer, len(fallbacks))
+	for i, f := range fallbacks {
+		drawers[i] = &font.Drawer{Dst: img, Src: image.NewUniform(col), Face: f}
+	}
+
 	for _, r := range txt {
-		if (r >= 0x2E80 && r <= 0x9FFF) || (r >= 0x3040 && r <= 0x30FF) || (r >= 0xAC00 && r <= 0xD7AF) || (r >= 0xFF00 && r <= 0xFFEF) {
-			dF.DrawString(string(r))
-			dP.Dot = dF.Dot
-		} else {
+		isCJK := (r >= 0x2E80 && r <= 0x9FFF) || 
+		         (r >= 0x3040 && r <= 0x30FF) || 
+		         isKorean(r) || 
+		         (r >= 0xFF00 && r <= 0xFFEF)
+
+		drawn := false
+		if isCJK {
+			for _, df := range drawers {
+				if _, ok := df.Face.GlyphAdvance(r); ok {
+					df.Dot = dP.Dot
+					df.DrawString(string(r))
+					dP.Dot = df.Dot
+					drawn = true
+					break
+				}
+			}
+		}
+		
+		if !drawn {
 			dP.DrawString(string(r))
-			dF.Dot = dP.Dot
+			for _, df := range drawers {
+				df.Dot = dP.Dot
+			}
 		}
 	}
+}
+
+func measureCompositeString(txt string, fP font.Face, fallbacks []font.Face) float64 {
+	dP := &font.Drawer{Face: fP}
+	var totalWidth fixed.Int26_6
+
+	for _, r := range txt {
+		isCJK := (r >= 0x2E80 && r <= 0x9FFF) || 
+		         (r >= 0x3040 && r <= 0x30FF) || 
+		         isKorean(r) || 
+		         (r >= 0xFF00 && r <= 0xFFEF)
+
+		measured := false
+		if isCJK {
+			for _, f := range fallbacks {
+				if adv, ok := f.GlyphAdvance(r); ok {
+					totalWidth += adv
+					measured = true
+					break
+				}
+			}
+		}
+		
+		if !measured {
+			totalWidth += dP.MeasureString(string(r))
+		}
+	}
+	return float64(totalWidth) / 64.0
 }
 
 func drawLine(img draw.Image, x1, y1, x2, y2, thickness int, col color.Color) {
@@ -1422,9 +1556,44 @@ func newToolBtn(i fyne.Resource, tip string, e *editorApp, tap func()) *tooltipB
 	return b
 }
 
+type cjkTheme struct {
+	fyne.Theme
+	font fyne.Resource
+}
+
+func (t *cjkTheme) Font(s fyne.TextStyle) fyne.Resource {
+	return t.font
+}
+
+func (t *cjkTheme) Color(name fyne.ThemeColorName, variant fyne.ThemeVariant) color.Color {
+	return t.Theme.Color(name, variant)
+}
+
+func (t *cjkTheme) Icon(name fyne.ThemeIconName) fyne.Resource {
+	return t.Theme.Icon(name)
+}
+
+func (t *cjkTheme) Size(name fyne.ThemeSizeName) float32 {
+	return t.Theme.Size(name)
+}
+
 func main() {
 	myApp := app.NewWithID("com.mermaid.sq.gui")
-	myApp.Settings().SetTheme(theme.DarkTheme())
+	
+	// Load CJK font for the UI theme (TTF only)
+	cjkFontDataList := getFallbackFontData(false)
+	var cjkFontData []byte
+	if len(cjkFontDataList) > 0 {
+		cjkFontData = cjkFontDataList[0]
+	} else {
+		cjkFontData = theme.DefaultTextFont().Content()
+	}
+	
+	// Fyne's internal theme system doesn't support .ttc. 
+	themeFont := fyne.NewStaticResource("CJKFont.ttf", cjkFontData)
+	
+	myApp.Settings().SetTheme(&cjkTheme{Theme: theme.DarkTheme(), font: themeFont})
+	
 	myWindow := myApp.NewWindow("Mermaid Sequence Diagram Editor")
 
 	e := &editorApp{
@@ -1434,7 +1603,7 @@ func main() {
 	}
 
 	e.entry = widget.NewMultiLineEntry()
-	e.entry.SetText("sequenceDiagram\n    autonumber\n    participant A as Alice\n    participant B as Bob\n    A->>B: Hello Bob, how are you?\n    alt is hungry\n        loop until full\n            A->>B: Get food\n        end\n    else is thirsty\n        A->>B: Get drink\n    end\n    Note right of B: Bob thinks\n    B-->>A: Jolly good!")
+	e.entry.SetText("sequenceDiagram\n    autonumber\n    participant A as Alice\n    participant B as Bob\n    A->>B: Hello Bob, how are you?\n    alt is hungry\n        loop until full\n            A->>B: Get food\n        end\n    else is thirsty\n        A->>B: Get drink\n    end\n    Note right of B: Bob thinks\n    Note right of B: Chinese: 中文字符测试\n    Note right of B: Japanese: 日本語テスト\n    Note right of B: Korean: 한국어 테스트\n    B-->>A: Jolly good!")
 	e.entry.OnChanged = func(s string) {
 		e.updatePreview()
 	}
